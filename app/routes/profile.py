@@ -2,6 +2,7 @@ import os
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,12 @@ ALLOWED_PHOTO_TYPES = {
 MAXIMUM_PHOTO_BYTES = 2 * 1024 * 1024
 
 UPLOAD_DIRECTORY = "uploads/profile_photos"
+
+
+os.makedirs(
+    UPLOAD_DIRECTORY,
+    exist_ok=True,
+)
 
 
 @router.post("/me/profile-photo")
@@ -58,11 +65,6 @@ async def upload_profile_photo(
         "image/webp": ".webp",
     }[photo.content_type]
 
-    os.makedirs(
-        UPLOAD_DIRECTORY,
-        exist_ok=True,
-    )
-
     filename = f"{uuid.uuid4().hex}{extension}"
     file_path = os.path.join(
         UPLOAD_DIRECTORY,
@@ -87,10 +89,11 @@ async def upload_profile_photo(
             detail="Active account required.",
         )
 
-    # Remove the previous uploaded photo if it belongs to this app.
     previous_url = account.profile_photo_url
 
-    if previous_url:
+    if previous_url and previous_url.startswith(
+        "/api/v1/profile-photos/",
+    ):
         previous_filename = previous_url.rsplit(
             "/",
             1,
@@ -107,11 +110,34 @@ async def upload_profile_photo(
             except OSError:
                 pass
 
-    public_url = f"/static/profile_photos/{filename}"
-    account.profile_photo_url = public_url
+    photo_url = f"/api/v1/profile-photos/{filename}"
+    account.profile_photo_url = photo_url
 
     db.commit()
 
     return {
-        "profile_photo_url": public_url,
+        "profile_photo_url": photo_url,
     }
+
+
+@router.get("/profile-photos/{filename}")
+def get_profile_photo(
+    filename: str,
+):
+    safe_filename = os.path.basename(filename)
+
+    file_path = os.path.join(
+        UPLOAD_DIRECTORY,
+        safe_filename,
+    )
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Profile photo not found.",
+        )
+
+    return FileResponse(
+        file_path,
+        media_type="image/jpeg",
+    )
