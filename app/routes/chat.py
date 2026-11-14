@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 
 from app.core.database import SessionLocal, get_db
-from app.guards.auth import guard
+from app.guards.auth import current, guard
 from app.models.entities import Conversation, Message, User
 from app.routes.realtime import publish
 from app.schemas.auth import ConversationInput, MessageInput
@@ -52,9 +52,16 @@ def list_guards(
         default="",
         max_length=120,
     ),
-    user: User = Depends(guard),
+    user: User = Depends(current),
     db: Session = Depends(get_db),
 ):
+    if user.role not in {"GUARD", "ADMIN"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Guard or Administrator access required",
+        )
+
+
     statement = select(User).where(
         User.role == "GUARD",
         User.active.is_(True),
