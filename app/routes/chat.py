@@ -1,79 +1,413 @@
+import base64
+import binascii
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, or_
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from app.core.database import get_db
-from app.models.entities import User, Conversation, Message
-from app.schemas.auth import ConversationInput, MessageInput
-from app.guards.auth import guard
-from app.services.chat import member, message_dict, save_message
-from app.routes.realtime import publish
 from starlette.concurrency import run_in_threadpool
 
-router = APIRouter(tags=["Chat"])
+from app.core.database import SessionLocal, get_db
+from app.guards.auth import guard
+from app.models.entities import Conversation, Message, User
+from app.routes.realtime import publish
+from app.schemas.auth import ConversationInput, MessageInput
+from app.services.chat import member, message_dict, save_message
+
+
+router = APIRouter(
+    tags=["Chat"],
+)
+
+
+# =========================================================
+# ENCRYPTION KEY SCHEMA
+# =========================================================
+
+class EncryptionKeyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    public_key: str = Field(
+        min_length=44,
+        max_length=44,
+    )
+
+
+# =========================================================
+# GUARD DIRECTORY AND SEARCH
+# =========================================================
 
 @router.get("/guards")
-def guards(
+def list_guards(
+    q: str = Query(
+        default="",
+        max_length=120,
+    ),
     user: User = Depends(guard),
     db: Session = Depends(get_db),
 ):
-    rows = db.scalars(
-        select(User)
-        .where(
-            User.role == "GUARD",
-            User.active == True,
-            User.id != user.id,
-        )
-        .limit(200)
+    statement = select(User).where(
+        User.role == "GUARD",
+        User.active.is_(True),
+        User.id != user.id,
     )
+
+    search = q.strip()
+
+    if search:
+        statement = statement.where(
+            or_(
+                User.full_name.icontains(
+                    search,
+                    autoescape=True,
+                ),
+                User.zone.icontains(
+                    search,
+                    autoescape=True,
+                ),
+                User.email.icontains(
+                    search,
+                    autoescape=True,
+                ),
+                User.phone.icontains(
+                    search,
+                    autoescape=True,
+                ),
+            )
+        )
+
+    statement = statement.order_by(
+        User.full_name.asc().nulls_last(),
+        User.email.asc(),
+    ).limit(100)
+
+    users = db.scalars(statement)
 
     return [
         {
             "id": item.id,
             "full_name": item.full_name,
             "email": item.email,
+            "phone": item.phone,
             "zone": item.zone,
         }
-        for item in rows
+        for item in users
     ]
+
+
+# =========================================================
+# REGISTER THE CURRENT GUARD'S PUBLIC KEY
+# =========================================================
+
+@router.post("/encryption-key")
+def register_encryption_key(
+    data: EncryptionKeyInput,
+    user: User = Depends(guard),
+    db: Session = Depends(get_db),
+):
+    try:
+        decoded = base64.b64decode(
+            data.public_key,
+            validate=True,
+        )
+    except (ValueError, binascii.Error):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid public key",
+        ) from None
+
+    if len(decoded) != 32 or decoded == bytes(32):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid public key",
+        )
+
+    canonical_key = base64.b64encode(
+        decoded
+    ).decode("ascii")
+
+    account = db.scalar(
+        select(User)
+        .where(User.id == user.id)
+        .with_for_update()
+    )
+
+    if (
+        account is None
+        or not account.active
+        or account.role != "GUARD"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Active Guard account required",
+        )
+
+    if (
+        account.encryption_public_key is not None
+        and account.encryption_public_key != canonical_key
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This account already has a different encryption "
+                "identity. Use the original device. "
+                "Automatic key replacement is disabled."
+            ),
+        )
+
+    account.encryption_public_key = canonical_key
+
+    db.commit()
+
+    return {
+        "public_key": canonical_key,
+    }
+
+
+# =========================================================
+# GET A GUARD'S PUBLIC KEY
+# =========================================================
+
+@router.get("/guards/{guard_id}/encryption-key")
+def get_encryption_key(
+    guard_id: str,
+    user: User = Depends(guard),
+    db: Session = Depends(get_db),
+):
+    account = db.get(
+        User,
+        guard_id,
+    )
+
+    if (
+        account is None
+        or account.role != "GUARD"
+        or not account.active
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Guard not found",
+        )
+
+    return {
+        "public_key": account.encryption_public_key,
+    }
+
+
+# =========================================================
+# CREATE OR REOPEN A DIRECT CONVERSATION
+# =========================================================
+
 @router.post("/conversations")
-def create(data: ConversationInput, user: User = Depends(guard), db: Session = Depends(get_db)):
-    other = db.get(User, data.guard_id)
-    if not other or other.role != "GUARD" or not other.active or other.id == user.id:
-        raise HTTPException(400, "Choose another active Guard")
-    a, b = sorted([user.id, other.id])
-    c = db.scalar(select(Conversation).where(Conversation.guard_a == a, Conversation.guard_b == b))
-    if not c:
-        c = Conversation(guard_a=a, guard_b=b)
-        db.add(c)
+def create_conversation(
+    data: ConversationInput,
+    user: User = Depends(guard),
+    db: Session = Depends(get_db),
+):
+    other = db.get(
+        User,
+        data.guard_id,
+    )
+
+    if (
+        other is None
+        or other.role != "GUARD"
+        or not other.active
+        or other.id == user.id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Choose another active Guard",
+        )
+
+    guard_a, guard_b = sorted(
+        [user.id, other.id]
+    )
+
+    def find_conversation():
+        return db.scalar(
+            select(Conversation).where(
+                Conversation.guard_a == guard_a,
+                Conversation.guard_b == guard_b,
+            )
+        )
+
+    conversation = find_conversation()
+
+    if conversation is None:
+        conversation = Conversation(
+            guard_a=guard_a,
+            guard_b=guard_b,
+        )
+
+        db.add(conversation)
+
         try:
             db.commit()
         except IntegrityError:
             db.rollback()
-            c = db.scalar(select(Conversation).where(Conversation.guard_a == a, Conversation.guard_b == b))
-    return {"id": c.id, "guard_a": c.guard_a, "guard_b": c.guard_b}
+
+            # Another request may have created the same
+            # Guard pair while this request was running.
+            conversation = find_conversation()
+
+            if conversation is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Unable to create the conversation. "
+                        "Please try again."
+                    ),
+                ) from None
+
+    return {
+        "id": conversation.id,
+        "guard_a": conversation.guard_a,
+        "guard_b": conversation.guard_b,
+    }
+
+
+# =========================================================
+# LIST THE CURRENT GUARD'S CONVERSATIONS
+# =========================================================
 
 @router.get("/conversations")
-def conversations(user: User = Depends(guard), db: Session = Depends(get_db)):
-    rows = db.scalars(select(Conversation).where(or_(Conversation.guard_a == user.id, Conversation.guard_b == user.id)).order_by(Conversation.created_at.desc()).limit(200))
-    return [{"id": c.id, "guard_a": c.guard_a, "guard_b": c.guard_b} for c in rows]
+def list_conversations(
+    user: User = Depends(guard),
+    db: Session = Depends(get_db),
+):
+    statement = (
+        select(Conversation)
+        .where(
+            or_(
+                Conversation.guard_a == user.id,
+                Conversation.guard_b == user.id,
+            )
+        )
+        .order_by(
+            Conversation.created_at.desc(),
+            Conversation.id.desc(),
+        )
+        .limit(200)
+    )
 
-@router.get("/conversations/{cid}/messages")
-def history(cid: str, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), user: User = Depends(guard), db: Session = Depends(get_db)):
-    member(db, cid, user)
-    rows = db.scalars(select(Message).where(Message.conversation_id == cid).order_by(Message.created_at.desc(), Message.id.desc()).offset(offset).limit(limit))
-    return [message_dict(m) for m in rows]
+    conversations = db.scalars(statement)
 
-@router.post("/conversations/{cid}/messages", status_code=201)
-async def send(cid: str, data: MessageInput, user: User = Depends(guard)):
-    from app.core.database import SessionLocal
-    def work():
+    return [
+        {
+            "id": conversation.id,
+            "guard_a": conversation.guard_a,
+            "guard_b": conversation.guard_b,
+        }
+        for conversation in conversations
+    ]
+
+
+# =========================================================
+# CONVERSATION MESSAGE HISTORY
+# =========================================================
+
+@router.get("/conversations/{conversation_id}/messages")
+def get_messages(
+    conversation_id: str,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=100,
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+    ),
+    user: User = Depends(guard),
+    db: Session = Depends(get_db),
+):
+    # Raises an error if the Guard is not a participant.
+    member(
+        db,
+        conversation_id,
+        user,
+    )
+
+    statement = (
+        select(Message)
+        .where(
+            Message.conversation_id == conversation_id
+        )
+        .order_by(
+            Message.created_at.desc(),
+            Message.id.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+    )
+
+    messages = db.scalars(statement)
+
+    return [
+        message_dict(message)
+        for message in messages
+    ]
+
+
+# =========================================================
+# SEND AN ENCRYPTED MESSAGE
+# =========================================================
+
+@router.post(
+    "/conversations/{conversation_id}/messages",
+    status_code=201,
+)
+async def send_message(
+    conversation_id: str,
+    data: MessageInput,
+    user: User = Depends(guard),
+):
+    # Copy the identifier before moving database work
+    # into the worker thread.
+    sender_id = user.id
+
+    def persist_message():
         with SessionLocal() as db:
-            from app.models.entities import User
-            fresh = db.get(User, user.id)
-            if not fresh or not fresh.active:
-                raise HTTPException(401, "Inactive account")
-            return save_message(db, cid, fresh, data)
-    message, recipients = await run_in_threadpool(work)
-    await publish(recipients, {"type": "message", "message": message})
+            sender = db.get(
+                User,
+                sender_id,
+            )
+
+            if sender is None or not sender.active:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Inactive account",
+                )
+
+            if sender.role != "GUARD":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Guard access required",
+                )
+
+            # save_message checks conversation membership,
+            # validates the ciphertext envelope, handles
+            # duplicate client IDs, and commits the message.
+            return save_message(
+                db,
+                conversation_id,
+                sender,
+                data,
+            )
+
+    message, recipients = await run_in_threadpool(
+        persist_message
+    )
+
+    # Persist first, then notify connected participants.
+    await publish(
+        recipients,
+        {
+            "type": "message",
+            "message": message,
+        },
+    )
+
     return message
