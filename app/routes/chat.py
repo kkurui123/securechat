@@ -1,12 +1,14 @@
 import base64
 import binascii
 
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
+
 
 from app.core.database import SessionLocal, get_db
 from app.guards.auth import guard
@@ -16,17 +18,21 @@ from app.schemas.auth import ConversationInput, MessageInput
 from app.services.chat import member, message_dict, save_message
 
 
+
 router = APIRouter(
     tags=["Chat"],
 )
+
 
 
 # =========================================================
 # ENCRYPTION KEY SCHEMA
 # =========================================================
 
+
 class EncryptionKeyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
 
     public_key: str = Field(
         min_length=44,
@@ -34,9 +40,11 @@ class EncryptionKeyInput(BaseModel):
     )
 
 
+
 # =========================================================
 # GUARD DIRECTORY AND SEARCH
 # =========================================================
+
 
 @router.get("/guards")
 def list_guards(
@@ -53,7 +61,9 @@ def list_guards(
         User.id != user.id,
     )
 
+
     search = q.strip()
+
 
     if search:
         statement = statement.where(
@@ -77,12 +87,15 @@ def list_guards(
             )
         )
 
+
     statement = statement.order_by(
         User.full_name.asc().nulls_last(),
         User.email.asc(),
     ).limit(100)
 
+
     users = db.scalars(statement)
+
 
     return [
         {
@@ -91,14 +104,17 @@ def list_guards(
             "email": item.email,
             "phone": item.phone,
             "zone": item.zone,
+            "profile_photo_url": item.profile_photo_url,
         }
         for item in users
     ]
 
 
+
 # =========================================================
 # REGISTER THE CURRENT GUARD'S PUBLIC KEY
 # =========================================================
+
 
 @router.post("/encryption-key")
 def register_encryption_key(
@@ -117,21 +133,25 @@ def register_encryption_key(
             detail="Invalid public key",
         ) from None
 
+
     if len(decoded) != 32 or decoded == bytes(32):
         raise HTTPException(
             status_code=422,
             detail="Invalid public key",
         )
 
+
     canonical_key = base64.b64encode(
         decoded
     ).decode("ascii")
+
 
     account = db.scalar(
         select(User)
         .where(User.id == user.id)
         .with_for_update()
     )
+
 
     if (
         account is None
@@ -142,6 +162,7 @@ def register_encryption_key(
             status_code=403,
             detail="Active Guard account required",
         )
+
 
     if (
         account.encryption_public_key is not None
@@ -156,18 +177,23 @@ def register_encryption_key(
             ),
         )
 
+
     account.encryption_public_key = canonical_key
 
+
     db.commit()
+
 
     return {
         "public_key": canonical_key,
     }
 
 
+
 # =========================================================
 # GET A GUARD'S PUBLIC KEY
 # =========================================================
+
 
 @router.get("/guards/{guard_id}/encryption-key")
 def get_encryption_key(
@@ -180,6 +206,7 @@ def get_encryption_key(
         guard_id,
     )
 
+
     if (
         account is None
         or account.role != "GUARD"
@@ -190,14 +217,17 @@ def get_encryption_key(
             detail="Guard not found",
         )
 
+
     return {
         "public_key": account.encryption_public_key,
     }
 
 
+
 # =========================================================
 # CREATE OR REOPEN A DIRECT CONVERSATION
 # =========================================================
+
 
 @router.post("/conversations")
 def create_conversation(
@@ -210,6 +240,7 @@ def create_conversation(
         data.guard_id,
     )
 
+
     if (
         other is None
         or other.role != "GUARD"
@@ -221,9 +252,11 @@ def create_conversation(
             detail="Choose another active Guard",
         )
 
+
     guard_a, guard_b = sorted(
         [user.id, other.id]
     )
+
 
     def find_conversation():
         return db.scalar(
@@ -233,7 +266,9 @@ def create_conversation(
             )
         )
 
+
     conversation = find_conversation()
+
 
     if conversation is None:
         conversation = Conversation(
@@ -241,16 +276,20 @@ def create_conversation(
             guard_b=guard_b,
         )
 
+
         db.add(conversation)
+
 
         try:
             db.commit()
         except IntegrityError:
             db.rollback()
 
+
             # Another request may have created the same
             # Guard pair while this request was running.
             conversation = find_conversation()
+
 
             if conversation is None:
                 raise HTTPException(
@@ -261,6 +300,7 @@ def create_conversation(
                     ),
                 ) from None
 
+
     return {
         "id": conversation.id,
         "guard_a": conversation.guard_a,
@@ -268,9 +308,11 @@ def create_conversation(
     }
 
 
+
 # =========================================================
 # LIST THE CURRENT GUARD'S CONVERSATIONS
 # =========================================================
+
 
 @router.get("/conversations")
 def list_conversations(
@@ -292,7 +334,9 @@ def list_conversations(
         .limit(200)
     )
 
+
     conversations = db.scalars(statement)
+
 
     return [
         {
@@ -304,9 +348,11 @@ def list_conversations(
     ]
 
 
+
 # =========================================================
 # CONVERSATION MESSAGE HISTORY
 # =========================================================
+
 
 @router.get("/conversations/{conversation_id}/messages")
 def get_messages(
@@ -330,6 +376,7 @@ def get_messages(
         user,
     )
 
+
     statement = (
         select(Message)
         .where(
@@ -343,7 +390,9 @@ def get_messages(
         .limit(limit)
     )
 
+
     messages = db.scalars(statement)
+
 
     return [
         message_dict(message)
@@ -351,9 +400,11 @@ def get_messages(
     ]
 
 
+
 # =========================================================
 # SEND AN ENCRYPTED MESSAGE
 # =========================================================
+
 
 @router.post(
     "/conversations/{conversation_id}/messages",
@@ -368,6 +419,7 @@ async def send_message(
     # into the worker thread.
     sender_id = user.id
 
+
     def persist_message():
         with SessionLocal() as db:
             sender = db.get(
@@ -375,17 +427,20 @@ async def send_message(
                 sender_id,
             )
 
+
             if sender is None or not sender.active:
                 raise HTTPException(
                     status_code=401,
                     detail="Inactive account",
                 )
 
+
             if sender.role != "GUARD":
                 raise HTTPException(
                     status_code=403,
                     detail="Guard access required",
                 )
+
 
             # save_message checks conversation membership,
             # validates the ciphertext envelope, handles
@@ -397,9 +452,11 @@ async def send_message(
                 data,
             )
 
+
     message, recipients = await run_in_threadpool(
         persist_message
     )
+
 
     # Persist first, then notify connected participants.
     await publish(
@@ -409,5 +466,6 @@ async def send_message(
             "message": message,
         },
     )
+
 
     return message
