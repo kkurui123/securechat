@@ -80,6 +80,10 @@ class User(Base):
         String(44),
         nullable=True,
     )
+    profile_photo_url = Column(
+    String(500),
+    nullable=True,
+)
 
 
 # =========================================================

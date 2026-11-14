@@ -6,6 +6,13 @@ from app.core.config import settings
 from app.core.database import engine
 from app.routes import auth, chat, incidents, realtime, health
 
+from fastapi.staticfiles import StaticFiles
+
+app.mount(
+    "/static",
+    StaticFiles(directory="uploads"),
+    name="uploads",
+)
 @asynccontextmanager
 async def lifespan(app):
     yield

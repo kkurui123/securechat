@@ -94,7 +94,7 @@ def login(
         "expires_in": 1800,
         "user": public_user(user),
     }
-
+ 
 
 @router.get("/me")
 def me(
