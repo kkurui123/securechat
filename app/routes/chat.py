@@ -13,10 +13,29 @@ from starlette.concurrency import run_in_threadpool
 router = APIRouter(tags=["Chat"])
 
 @router.get("/guards")
-def guards(user: User = Depends(guard), db: Session = Depends(get_db)):
-    rows = db.scalars(select(User).where(User.role == "GUARD", User.active == True, User.id != user.id).limit(200))
-    return [{"id": u.id, "email": u.email} for u in rows]
+def guards(
+    user: User = Depends(guard),
+    db: Session = Depends(get_db),
+):
+    rows = db.scalars(
+        select(User)
+        .where(
+            User.role == "GUARD",
+            User.active == True,
+            User.id != user.id,
+        )
+        .limit(200)
+    )
 
+    return [
+        {
+            "id": item.id,
+            "full_name": item.full_name,
+            "email": item.email,
+            "zone": item.zone,
+        }
+        for item in rows
+    ]
 @router.post("/conversations")
 def create(data: ConversationInput, user: User = Depends(guard), db: Session = Depends(get_db)):
     other = db.get(User, data.guard_id)

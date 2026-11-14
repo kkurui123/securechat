@@ -11,12 +11,45 @@ def now():
 
 class User(Base):
     __tablename__ = "users"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    email: Mapped[str] = mapped_column(String(320), unique=True)
-    phone: Mapped[str | None] = mapped_column(String(10), unique=True, nullable=True)
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=uid,
+    )
+
+    full_name: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+    )
+
+    email: Mapped[str] = mapped_column(
+        String(320),
+        unique=True,
+    )
+
+    phone: Mapped[str | None] = mapped_column(
+        String(10),
+        unique=True,
+        nullable=True,
+    )
+
+    zone: Mapped[str | None] = mapped_column(
+        String(10),
+        nullable=True,
+    )
+
     password_hash: Mapped[str] = mapped_column(Text)
-    role: Mapped[str] = mapped_column(String(10), default="GUARD")
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    role: Mapped[str] = mapped_column(
+        String(10),
+        default="GUARD",
+    )
+
+    active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+    )
 
 class Conversation(Base):
     __tablename__ = "conversations"
