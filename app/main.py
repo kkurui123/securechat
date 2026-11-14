@@ -1,32 +1,79 @@
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+
 from app.core.config import settings
 from app.core.database import engine
-from app.routes import auth, chat, incidents, realtime, health
+from app.routes import auth, chat, incidents, profile, realtime, health
 
-from fastapi.staticfiles import StaticFiles
+import os
 
-app.mount(
-    "/static",
-    StaticFiles(directory="uploads"),
-    name="uploads",
+
+UPLOAD_DIRECTORY = "uploads"
+PROFILE_PHOTO_DIRECTORY = os.path.join(
+    UPLOAD_DIRECTORY,
+    "profile_photos",
 )
+
+
+os.makedirs(
+    PROFILE_PHOTO_DIRECTORY,
+    exist_ok=True,
+)
+
+
 @asynccontextmanager
 async def lifespan(app):
     yield
+
     await run_in_threadpool(engine.dispose)
 
+
 cfg = settings()
-app = FastAPI(title="SecureChat API", version="0.2.0", lifespan=lifespan,
-              docs_url="/docs" if cfg.enable_docs else None, redoc_url=None,
-              openapi_url="/openapi.json" if cfg.enable_docs else None)
-app.add_middleware(CORSMiddleware, allow_origins=cfg.cors_origins,
-                   allow_credentials=False, allow_methods=["GET", "POST", "PATCH"],
-                   allow_headers=["Authorization", "Content-Type"])
-for module in (auth, chat, incidents, realtime, health):
-    app.include_router(module.router, prefix="/api/v1")
+
+app = FastAPI(
+    title="SecureChat API",
+    version="0.2.0",
+    lifespan=lifespan,
+    docs_url="/docs" if cfg.enable_docs else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if cfg.enable_docs else None,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cfg.cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+app.mount(
+    "/static",
+    StaticFiles(directory=UPLOAD_DIRECTORY),
+    name="uploads",
+)
+
+for module in (
+    auth,
+    chat,
+    incidents,
+    profile,
+    realtime,
+    health,
+):
+    app.include_router(
+        module.router,
+        prefix="/api/v1",
+    )
+
+
 @app.get("/")
 def root():
-    return {"service": "SecureChat API", "version": "0.2.0"}
+    return {
+        "service": "SecureChat API",
+        "version": "0.2.0",
+    }

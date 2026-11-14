@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
+
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -11,23 +12,29 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+
 from app.core.database import Base
+
 
 
 def uid() -> str:
     return str(uuid.uuid4())
 
 
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
 
 
 # =========================================================
 # USERS
 # =========================================================
 
+
 class User(Base):
     __tablename__ = "users"
+
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -35,10 +42,12 @@ class User(Base):
         default=uid,
     )
 
+
     full_name: Mapped[str | None] = mapped_column(
         String(120),
         nullable=True,
     )
+
 
     email: Mapped[str] = mapped_column(
         String(320),
@@ -46,21 +55,25 @@ class User(Base):
         nullable=False,
     )
 
+
     phone: Mapped[str | None] = mapped_column(
         String(10),
         unique=True,
         nullable=True,
     )
 
+
     zone: Mapped[str | None] = mapped_column(
         String(10),
         nullable=True,
     )
 
+
     password_hash: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
+
 
     role: Mapped[str] = mapped_column(
         String(10),
@@ -68,11 +81,13 @@ class User(Base):
         nullable=False,
     )
 
+
     active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         nullable=False,
     )
+
 
     # Public X25519 key only.
     # Private keys remain on the Guard's device.
@@ -80,18 +95,23 @@ class User(Base):
         String(44),
         nullable=True,
     )
-    profile_photo_url = Column(
-    String(500),
-    nullable=True,
-)
+
+
+    profile_photo_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
 
 
 # =========================================================
 # CONVERSATIONS
 # =========================================================
 
+
 class Conversation(Base):
     __tablename__ = "conversations"
+
 
     __table_args__ = (
         UniqueConstraint(
@@ -101,21 +121,25 @@ class Conversation(Base):
         ),
     )
 
+
     id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
         default=uid,
     )
 
+
     guard_a: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
 
+
     guard_b: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
+
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -124,12 +148,15 @@ class Conversation(Base):
     )
 
 
+
 # =========================================================
 # MESSAGES
 # =========================================================
 
+
 class Message(Base):
     __tablename__ = "messages"
+
 
     __table_args__ = (
         UniqueConstraint(
@@ -139,11 +166,13 @@ class Message(Base):
         ),
     )
 
+
     id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
         default=uid,
     )
+
 
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("conversations.id"),
@@ -151,15 +180,18 @@ class Message(Base):
         nullable=False,
     )
 
+
     sender_id: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
 
+
     client_message_id: Mapped[str] = mapped_column(
         String(36),
         nullable=False,
     )
+
 
     # Current Flutter code uses TEXT as the outer transport
     # kind for text, photos, and files. The actual content type
@@ -169,10 +201,12 @@ class Message(Base):
         nullable=False,
     )
 
+
     ciphertext: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
+
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -181,12 +215,15 @@ class Message(Base):
     )
 
 
+
 # =========================================================
 # INCIDENTS
 # =========================================================
 
+
 class Incident(Base):
     __tablename__ = "incidents"
+
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -194,30 +231,36 @@ class Incident(Base):
         default=uid,
     )
 
+
     reported_by: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
+
 
     report_type: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
     )
 
+
     conversation_id: Mapped[str | None] = mapped_column(
         ForeignKey("conversations.id"),
         nullable=True,
     )
+
 
     reported_guard_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"),
         nullable=True,
     )
 
+
     reason: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
+
 
     status: Mapped[str] = mapped_column(
         String(20),
@@ -225,15 +268,18 @@ class Incident(Base):
         nullable=False,
     )
 
+
     reviewed_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"),
         nullable=True,
     )
 
+
     reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
+
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
