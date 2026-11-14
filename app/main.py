@@ -1,15 +1,27 @@
 from contextlib import asynccontextmanager
 
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+
 from app.core.config import settings
 from app.core.database import engine
-from app.routes import auth, chat, incidents, profile, realtime, health
+from app.routes import (
+    admin,
+    auth,
+    chat,
+    incidents,
+    profile,
+    realtime,
+    health,
+)
+
 
 import os
+
 
 
 UPLOAD_DIRECTORY = "uploads"
@@ -19,20 +31,25 @@ PROFILE_PHOTO_DIRECTORY = os.path.join(
 )
 
 
+
 os.makedirs(
     PROFILE_PHOTO_DIRECTORY,
     exist_ok=True,
 )
 
 
+
 @asynccontextmanager
 async def lifespan(app):
     yield
 
+
     await run_in_threadpool(engine.dispose)
 
 
+
 cfg = settings()
+
 
 app = FastAPI(
     title="SecureChat API",
@@ -43,13 +60,23 @@ app = FastAPI(
     openapi_url="/openapi.json" if cfg.enable_docs else None,
 )
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cfg.cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=[
+        "GET",
+        "POST",
+        "PATCH",
+        "DELETE",
+    ],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+    ],
 )
+
 
 app.mount(
     "/static",
@@ -57,7 +84,9 @@ app.mount(
     name="uploads",
 )
 
+
 for module in (
+    admin,
     auth,
     chat,
     incidents,
@@ -69,6 +98,7 @@ for module in (
         module.router,
         prefix="/api/v1",
     )
+
 
 
 @app.get("/")
