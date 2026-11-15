@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,16 @@ from app.routes.auth import public_user
 
 
 router = APIRouter(tags=["Incidents and Admin"])
+
+
+class IncidentReviewInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+    status: str = Field(
+        min_length=8,
+        max_length=8,
+    )
 
 
 def output(incident: Incident) -> dict:
@@ -154,7 +165,7 @@ def decide(
 @router.patch("/admin/incidents/{incident_id}/review")
 def review_incident(
     incident_id: str,
-    data: StatusInput,
+    data: IncidentReviewInput,
     user: User = Depends(admin),
     db: Session = Depends(get_db),
 ):
