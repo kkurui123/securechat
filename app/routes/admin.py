@@ -36,9 +36,6 @@ def user_dict(user: User) -> dict:
         "active": user.active,
         "is_suspended": user.is_suspended,
         "profile_photo_url": user.profile_photo_url,
-        "created_at": user.created_at.isoformat()
-        if user.created_at
-        else None,
     }
 
 
