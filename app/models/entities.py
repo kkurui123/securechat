@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 
+
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -14,7 +15,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 
+
 from app.core.database import Base
+
 
 
 
@@ -25,8 +28,10 @@ def uid() -> str:
 
 
 
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
 
 
 
@@ -37,8 +42,10 @@ def now() -> datetime:
 
 
 
+
 class User(Base):
     __tablename__ = "users"
+
 
 
 
@@ -50,10 +57,12 @@ class User(Base):
 
 
 
+
     full_name: Mapped[str | None] = mapped_column(
         String(120),
         nullable=True,
     )
+
 
 
 
@@ -65,11 +74,13 @@ class User(Base):
 
 
 
+
     phone: Mapped[str | None] = mapped_column(
         String(10),
         unique=True,
         nullable=True,
     )
+
 
 
 
@@ -80,10 +91,12 @@ class User(Base):
 
 
 
+
     password_hash: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
+
 
 
 
@@ -95,11 +108,13 @@ class User(Base):
 
 
 
+
     active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         nullable=False,
     )
+
 
 
 
@@ -112,12 +127,14 @@ class User(Base):
 
 
 
+
     # Public X25519 key only.
     # Private keys remain on the Guard's device.
     encryption_public_key: Mapped[str | None] = mapped_column(
         String(44),
         nullable=True,
     )
+
 
 
 
@@ -129,14 +146,17 @@ class User(Base):
 
 
 
+
 # =========================================================
 # CONVERSATIONS
 # =========================================================
 
 
 
+
 class Conversation(Base):
     __tablename__ = "conversations"
+
 
 
 
@@ -150,11 +170,13 @@ class Conversation(Base):
 
 
 
+
     id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
         default=uid,
     )
+
 
 
 
@@ -165,10 +187,12 @@ class Conversation(Base):
 
 
 
+
     guard_b: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
+
 
 
 
@@ -181,14 +205,17 @@ class Conversation(Base):
 
 
 
+
 # =========================================================
 # MESSAGES
 # =========================================================
 
 
 
+
 class Message(Base):
     __tablename__ = "messages"
+
 
 
 
@@ -202,11 +229,13 @@ class Message(Base):
 
 
 
+
     id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
         default=uid,
     )
+
 
 
 
@@ -218,6 +247,7 @@ class Message(Base):
 
 
 
+
     sender_id: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
@@ -225,10 +255,12 @@ class Message(Base):
 
 
 
+
     client_message_id: Mapped[str] = mapped_column(
         String(36),
         nullable=False,
     )
+
 
 
 
@@ -242,10 +274,12 @@ class Message(Base):
 
 
 
+
     ciphertext: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
+
 
 
 
@@ -258,14 +292,17 @@ class Message(Base):
 
 
 
+
 # =========================================================
 # INCIDENTS
 # =========================================================
 
 
 
+
 class Incident(Base):
     __tablename__ = "incidents"
+
 
 
 
@@ -277,10 +314,12 @@ class Incident(Base):
 
 
 
+
     reported_by: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
+
 
 
 
@@ -291,10 +330,12 @@ class Incident(Base):
 
 
 
+
     conversation_id: Mapped[str | None] = mapped_column(
         ForeignKey("conversations.id"),
         nullable=True,
     )
+
 
 
 
@@ -305,10 +346,12 @@ class Incident(Base):
 
 
 
+
     reason: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
+
 
 
 
@@ -320,10 +363,12 @@ class Incident(Base):
 
 
 
+
     reviewed_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"),
         nullable=True,
     )
+
 
 
 
@@ -334,8 +379,93 @@ class Incident(Base):
 
 
 
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=now,
         nullable=False,
+    )
+
+
+
+
+
+# =========================================================
+# RECOVERY REQUESTS
+# =========================================================
+
+
+
+
+class RecoveryRequest(Base):
+    __tablename__ = "recovery_requests"
+
+
+
+
+    __table_args__ = (
+        UniqueConstraint(
+            "incident_id",
+            name="uq_recovery_requests_incident",
+        ),
+    )
+
+
+
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=uid,
+    )
+
+
+
+
+    incident_id: Mapped[str] = mapped_column(
+        ForeignKey("incidents.id"),
+        unique=True,
+        nullable=False,
+    )
+
+
+
+
+    requested_by: Mapped[str] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+
+
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="PENDING",
+        nullable=False,
+    )
+
+
+
+
+    reason: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+
+
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now,
+        nullable=False,
+    )
+
+
+
+
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )

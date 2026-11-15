@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 
 from app.core.database import get_db
-from app.models.entities import User, Incident, now
+from app.models.entities import User, Incident, RecoveryRequest, now
 from app.schemas.auth import IncidentInput, Decision, StatusInput
 from app.guards.auth import guard, admin
 from app.services.chat import member
@@ -25,6 +25,16 @@ class IncidentReviewInput(BaseModel):
     )
 
 
+class RecoveryRequestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+    reason: str = Field(
+        min_length=10,
+        max_length=2000,
+    )
+
+
 def output(incident: Incident) -> dict:
     return {
         "id": incident.id,
@@ -37,6 +47,18 @@ def output(incident: Incident) -> dict:
         "reviewed_by": incident.reviewed_by,
         "created_at": incident.created_at,
         "reviewed_at": incident.reviewed_at,
+    }
+
+
+def recovery_output(request: RecoveryRequest) -> dict:
+    return {
+        "id": request.id,
+        "incident_id": request.incident_id,
+        "requested_by": request.requested_by,
+        "status": request.status,
+        "reason": request.reason,
+        "created_at": request.created_at,
+        "reviewed_at": request.reviewed_at,
     }
 
 
@@ -209,6 +231,82 @@ def review_incident(
 
 
     return output(incident)
+
+
+@router.post(
+    "/admin/incidents/{incident_id}/recovery-request",
+    status_code=201,
+)
+def request_recovery(
+    incident_id: str,
+    data: RecoveryRequestInput,
+    user: User = Depends(admin),
+    db: Session = Depends(get_db),
+):
+    incident = db.get(Incident, incident_id)
+
+
+    if incident is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Incident not found",
+        )
+
+
+    if incident.status != "APPROVED":
+        raise HTTPException(
+            status_code=409,
+            detail="Only approved incidents can be selected for recovery",
+        )
+
+
+    if not incident.conversation_id:
+        raise HTTPException(
+            status_code=409,
+            detail="This incident is not linked to a conversation",
+        )
+
+
+    existing = db.scalar(
+        select(RecoveryRequest)
+        .where(RecoveryRequest.incident_id == incident_id)
+    )
+
+
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="A recovery request already exists for this incident",
+        )
+
+
+    recovery_request = RecoveryRequest(
+        incident_id=incident_id,
+        requested_by=user.id,
+        reason=data.reason.strip(),
+    )
+
+
+    db.add(recovery_request)
+    db.commit()
+
+
+    return recovery_output(recovery_request)
+
+
+@router.get("/admin/recovery-requests")
+def list_recovery_requests(
+    user: User = Depends(admin),
+    db: Session = Depends(get_db),
+):
+    requests = db.scalars(
+        select(RecoveryRequest)
+        .order_by(RecoveryRequest.created_at.desc())
+        .limit(200)
+    )
+
+
+    return [recovery_output(request) for request in requests]
 
 
 @router.get("/admin/guards")
