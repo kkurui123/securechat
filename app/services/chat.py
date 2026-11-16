@@ -2,28 +2,35 @@ import base64
 import binascii
 import uuid
 
+
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+
 from app.models.entities import Conversation, Message, User
+
 
 
 # Limit the decoded encrypted envelope, not the plaintext.
 MAX_ENCRYPTED_BYTES = 2_000_000
 
+
 # Match the existing MessageInput ciphertext limit.
 MAX_BASE64_CHARACTERS = 2_800_000
+
 
 # AES-GCM envelope used by the Flutter client:
 # 12-byte nonce + ciphertext + 16-byte authentication tag.
 MIN_ENCRYPTED_BYTES = 28
 
 
+
 # =========================================================
 # CONVERSATION ACCESS
 # =========================================================
+
 
 def member(
     db: Session,
@@ -34,6 +41,7 @@ def member(
         Conversation,
         conversation_id,
     )
+
 
     if (
         conversation is None
@@ -47,12 +55,15 @@ def member(
             detail="Conversation not found",
         )
 
+
     return conversation
+
 
 
 # =========================================================
 # MESSAGE SERIALIZATION
 # =========================================================
+
 
 def message_dict(
     message: Message,
@@ -65,12 +76,19 @@ def message_dict(
         "kind": message.kind,
         "ciphertext": message.ciphertext,
         "created_at": message.created_at.isoformat(),
+        "read_at": (
+            message.read_at.isoformat()
+            if message.read_at is not None
+            else None
+        ),
     }
+
 
 
 # =========================================================
 # VALIDATION
 # =========================================================
+
 
 def validate_client_message_id(
     client_message_id: str,
@@ -83,6 +101,7 @@ def validate_client_message_id(
             detail="client_message_id must be a valid UUID",
         ) from None
 
+
     if str(parsed) != client_message_id.lower():
         raise HTTPException(
             status_code=422,
@@ -91,6 +110,7 @@ def validate_client_message_id(
                 "hyphenated UUID format"
             ),
         )
+
 
 
 def validate_ciphertext(
@@ -102,11 +122,13 @@ def validate_ciphertext(
             detail="ciphertext must be a nonempty Base64 string",
         )
 
+
     if len(ciphertext) > MAX_BASE64_CHARACTERS:
         raise HTTPException(
             status_code=413,
             detail="Encrypted message exceeds the size limit",
         )
+
 
     try:
         payload = base64.b64decode(
@@ -119,11 +141,13 @@ def validate_ciphertext(
             detail="ciphertext must be valid Base64",
         ) from None
 
+
     if len(payload) < MIN_ENCRYPTED_BYTES:
         raise HTTPException(
             status_code=422,
             detail="Encrypted message envelope is incomplete",
         )
+
 
     if len(payload) > MAX_ENCRYPTED_BYTES:
         raise HTTPException(
@@ -132,9 +156,11 @@ def validate_ciphertext(
         )
 
 
+
 # =========================================================
 # IDEMPOTENT MESSAGE LOOKUP
 # =========================================================
+
 
 def find_existing_message(
     db: Session,
@@ -149,6 +175,7 @@ def find_existing_message(
     )
 
 
+
 def verify_duplicate_content(
     existing: Message,
     conversation_id: str,
@@ -161,6 +188,7 @@ def verify_duplicate_content(
         and existing.ciphertext == ciphertext
     )
 
+
     if not same_content:
         raise HTTPException(
             status_code=409,
@@ -171,9 +199,11 @@ def verify_duplicate_content(
         )
 
 
+
 # =========================================================
 # SAVE ENCRYPTED MESSAGE
 # =========================================================
+
 
 def save_message(
     db: Session,
@@ -187,11 +217,13 @@ def save_message(
             detail="Inactive account",
         )
 
+
     if user.role != "GUARD":
         raise HTTPException(
             status_code=403,
             detail="Guard access required",
         )
+
 
     conversation = member(
         db,
@@ -199,11 +231,13 @@ def save_message(
         user,
     )
 
+
     # Copy recipient IDs before a possible rollback.
     recipients = [
         conversation.guard_a,
         conversation.guard_b,
     ]
+
 
     # Keep PHOTO accepted for compatibility with the original
     # schema. The current Flutter client sends all inner
@@ -214,21 +248,26 @@ def save_message(
             detail="Unsupported message kind",
         )
 
+
     validate_client_message_id(
         data.client_message_id,
     )
+
 
     validate_ciphertext(
         data.ciphertext,
     )
 
+
     sender_id = user.id
+
 
     existing = find_existing_message(
         db,
         sender_id,
         data.client_message_id,
     )
+
 
     if existing is not None:
         verify_duplicate_content(
@@ -238,7 +277,9 @@ def save_message(
             data.ciphertext,
         )
 
+
         return message_dict(existing), recipients
+
 
     message = Message(
         conversation_id=conversation_id,
@@ -248,12 +289,15 @@ def save_message(
         ciphertext=data.ciphertext,
     )
 
+
     db.add(message)
+
 
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
+
 
         # A simultaneous retry may already have inserted
         # the same sender/client-message pair.
@@ -262,6 +306,7 @@ def save_message(
             sender_id,
             data.client_message_id,
         )
+
 
         if existing is None:
             raise HTTPException(
@@ -272,6 +317,7 @@ def save_message(
                 ),
             ) from None
 
+
         verify_duplicate_content(
             existing,
             conversation_id,
@@ -279,6 +325,8 @@ def save_message(
             data.ciphertext,
         )
 
+
         return message_dict(existing), recipients
+
 
     return message_dict(message), recipients

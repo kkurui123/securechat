@@ -2,9 +2,12 @@ import base64
 import binascii
 
 
+from datetime import datetime, timezone
+
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -30,6 +33,7 @@ router = APIRouter(
 # =========================================================
 
 
+
 class EncryptionKeyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -44,6 +48,7 @@ class EncryptionKeyInput(BaseModel):
 # =========================================================
 # GUARD DIRECTORY AND SEARCH
 # =========================================================
+
 
 
 @router.get("/guards")
@@ -121,6 +126,7 @@ def list_guards(
 # =========================================================
 # REGISTER THE CURRENT GUARD'S PUBLIC KEY
 # =========================================================
+
 
 
 @router.post("/encryption-key")
@@ -202,6 +208,7 @@ def register_encryption_key(
 # =========================================================
 
 
+
 @router.get("/guards/{guard_id}/encryption-key")
 def get_encryption_key(
     guard_id: str,
@@ -234,6 +241,7 @@ def get_encryption_key(
 # =========================================================
 # CREATE OR REOPEN A DIRECT CONVERSATION
 # =========================================================
+
 
 
 @router.post("/conversations")
@@ -293,8 +301,6 @@ def create_conversation(
             db.rollback()
 
 
-            # Another request may have created the same
-            # Guard pair while this request was running.
             conversation = find_conversation()
 
 
@@ -319,6 +325,7 @@ def create_conversation(
 # =========================================================
 # LIST THE CURRENT GUARD'S CONVERSATIONS
 # =========================================================
+
 
 
 @router.get("/conversations")
@@ -357,8 +364,120 @@ def list_conversations(
 
 
 # =========================================================
+# UNREAD MESSAGE COUNTS
+# =========================================================
+
+
+
+@router.get("/conversations/unread-counts")
+def unread_counts(
+    user: User = Depends(guard),
+    db: Session = Depends(get_db),
+):
+    conversations = db.scalars(
+        select(Conversation).where(
+            or_(
+                Conversation.guard_a == user.id,
+                Conversation.guard_b == user.id,
+            )
+        )
+    )
+
+
+    results = []
+
+
+    for conversation in conversations:
+        unread_count = db.scalar(
+            select(func.count(Message.id)).where(
+                Message.conversation_id == conversation.id,
+                Message.sender_id != user.id,
+                Message.read_at.is_(None),
+            )
+        )
+
+
+        results.append(
+            {
+                "conversation_id": conversation.id,
+                "unread_count": int(unread_count or 0),
+            }
+        )
+
+
+    return results
+
+
+
+# =========================================================
+# MARK A CONVERSATION AS READ
+# =========================================================
+
+
+
+@router.post("/conversations/{conversation_id}/mark-read")
+def mark_read(
+    conversation_id: str,
+    user: User = Depends(guard),
+    db: Session = Depends(get_db),
+):
+    conversation = member(
+        db,
+        conversation_id,
+        user,
+    )
+
+
+    unread_messages = db.scalars(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.sender_id != user.id,
+            Message.read_at.is_(None),
+        )
+        .with_for_update()
+    )
+
+
+    messages = list(unread_messages)
+
+
+    read_at = None
+
+
+    if messages:
+        read_at = datetime.now(timezone.utc)
+
+
+        for message in messages:
+            message.read_at = read_at
+
+
+        db.commit()
+
+
+    recipients = [
+        conversation.guard_a,
+        conversation.guard_b,
+    ]
+
+
+    return {
+        "conversation_id": conversation_id,
+        "marked_count": len(messages),
+        "read_at": (
+            read_at.isoformat()
+            if read_at is not None
+            else None
+        ),
+    }
+
+
+
+# =========================================================
 # CONVERSATION MESSAGE HISTORY
 # =========================================================
+
 
 
 @router.get("/conversations/{conversation_id}/messages")
@@ -376,7 +495,6 @@ def get_messages(
     user: User = Depends(guard),
     db: Session = Depends(get_db),
 ):
-    # Raises an error if the Guard is not a participant.
     member(
         db,
         conversation_id,
@@ -413,6 +531,7 @@ def get_messages(
 # =========================================================
 
 
+
 @router.post(
     "/conversations/{conversation_id}/messages",
     status_code=201,
@@ -422,8 +541,6 @@ async def send_message(
     data: MessageInput,
     user: User = Depends(guard),
 ):
-    # Copy the identifier before moving database work
-    # into the worker thread.
     sender_id = user.id
 
 
@@ -449,9 +566,6 @@ async def send_message(
                 )
 
 
-            # save_message checks conversation membership,
-            # validates the ciphertext envelope, handles
-            # duplicate client IDs, and commits the message.
             return save_message(
                 db,
                 conversation_id,
@@ -465,7 +579,6 @@ async def send_message(
     )
 
 
-    # Persist first, then notify connected participants.
     await publish(
         recipients,
         {

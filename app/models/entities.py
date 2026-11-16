@@ -2,7 +2,6 @@ import uuid
 from datetime import datetime, timezone
 
 
-
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -15,25 +14,15 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 
-
 from app.core.database import Base
-
-
-
 
 
 def uid() -> str:
     return str(uuid.uuid4())
 
 
-
-
-
 def now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-
 
 
 # =========================================================
@@ -41,12 +30,8 @@ def now() -> datetime:
 # =========================================================
 
 
-
-
 class User(Base):
     __tablename__ = "users"
-
-
 
 
     id: Mapped[str] = mapped_column(
@@ -56,14 +41,10 @@ class User(Base):
     )
 
 
-
-
     full_name: Mapped[str | None] = mapped_column(
         String(120),
         nullable=True,
     )
-
-
 
 
     email: Mapped[str] = mapped_column(
@@ -73,15 +54,11 @@ class User(Base):
     )
 
 
-
-
     phone: Mapped[str | None] = mapped_column(
         String(10),
         unique=True,
         nullable=True,
     )
-
-
 
 
     zone: Mapped[str | None] = mapped_column(
@@ -90,14 +67,10 @@ class User(Base):
     )
 
 
-
-
     password_hash: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
-
-
 
 
     role: Mapped[str] = mapped_column(
@@ -107,15 +80,11 @@ class User(Base):
     )
 
 
-
-
     active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         nullable=False,
     )
-
-
 
 
     is_suspended: Mapped[bool] = mapped_column(
@@ -126,8 +95,6 @@ class User(Base):
     )
 
 
-
-
     # Public X25519 key only.
     # Private keys remain on the Guard's device.
     encryption_public_key: Mapped[str | None] = mapped_column(
@@ -136,15 +103,10 @@ class User(Base):
     )
 
 
-
-
     profile_photo_url: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
     )
-
-
-
 
 
 # =========================================================
@@ -152,12 +114,8 @@ class User(Base):
 # =========================================================
 
 
-
-
 class Conversation(Base):
     __tablename__ = "conversations"
-
-
 
 
     __table_args__ = (
@@ -169,15 +127,11 @@ class Conversation(Base):
     )
 
 
-
-
     id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
         default=uid,
     )
-
-
 
 
     guard_a: Mapped[str] = mapped_column(
@@ -186,14 +140,10 @@ class Conversation(Base):
     )
 
 
-
-
     guard_b: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
-
-
 
 
     created_at: Mapped[datetime] = mapped_column(
@@ -203,20 +153,13 @@ class Conversation(Base):
     )
 
 
-
-
-
 # =========================================================
 # MESSAGES
 # =========================================================
 
 
-
-
 class Message(Base):
     __tablename__ = "messages"
-
-
 
 
     __table_args__ = (
@@ -228,15 +171,11 @@ class Message(Base):
     )
 
 
-
-
     id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
         default=uid,
     )
-
-
 
 
     conversation_id: Mapped[str] = mapped_column(
@@ -246,22 +185,16 @@ class Message(Base):
     )
 
 
-
-
     sender_id: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
 
 
-
-
     client_message_id: Mapped[str] = mapped_column(
         String(36),
         nullable=False,
     )
-
-
 
 
     # Current Flutter code uses TEXT as the outer transport
@@ -273,14 +206,10 @@ class Message(Base):
     )
 
 
-
-
     ciphertext: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
-
-
 
 
     created_at: Mapped[datetime] = mapped_column(
@@ -290,7 +219,11 @@ class Message(Base):
     )
 
 
-
+    # NULL means the recipient has not read the message yet.
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 # =========================================================
@@ -298,12 +231,8 @@ class Message(Base):
 # =========================================================
 
 
-
-
 class Incident(Base):
     __tablename__ = "incidents"
-
-
 
 
     id: Mapped[str] = mapped_column(
@@ -313,14 +242,10 @@ class Incident(Base):
     )
 
 
-
-
     reported_by: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
-
-
 
 
     report_type: Mapped[str] = mapped_column(
@@ -329,14 +254,10 @@ class Incident(Base):
     )
 
 
-
-
     conversation_id: Mapped[str | None] = mapped_column(
         ForeignKey("conversations.id"),
         nullable=True,
     )
-
-
 
 
     reported_guard_id: Mapped[str | None] = mapped_column(
@@ -345,14 +266,10 @@ class Incident(Base):
     )
 
 
-
-
     reason: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
-
-
 
 
     status: Mapped[str] = mapped_column(
@@ -362,22 +279,16 @@ class Incident(Base):
     )
 
 
-
-
     reviewed_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"),
         nullable=True,
     )
 
 
-
-
     reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
-
-
 
 
     created_at: Mapped[datetime] = mapped_column(
@@ -387,20 +298,13 @@ class Incident(Base):
     )
 
 
-
-
-
 # =========================================================
 # RECOVERY REQUESTS
 # =========================================================
 
 
-
-
 class RecoveryRequest(Base):
     __tablename__ = "recovery_requests"
-
-
 
 
     __table_args__ = (
@@ -411,15 +315,11 @@ class RecoveryRequest(Base):
     )
 
 
-
-
     id: Mapped[str] = mapped_column(
         String(36),
         primary_key=True,
         default=uid,
     )
-
-
 
 
     incident_id: Mapped[str] = mapped_column(
@@ -429,14 +329,10 @@ class RecoveryRequest(Base):
     )
 
 
-
-
     requested_by: Mapped[str] = mapped_column(
         ForeignKey("users.id"),
         nullable=False,
     )
-
-
 
 
     status: Mapped[str] = mapped_column(
@@ -446,14 +342,10 @@ class RecoveryRequest(Base):
     )
 
 
-
-
     reason: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
-
-
 
 
     created_at: Mapped[datetime] = mapped_column(
@@ -461,8 +353,6 @@ class RecoveryRequest(Base):
         default=now,
         nullable=False,
     )
-
-
 
 
     reviewed_at: Mapped[datetime | None] = mapped_column(
