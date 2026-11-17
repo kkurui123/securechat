@@ -1,10 +1,9 @@
 import hashlib
 import logging
 import random
-import smtplib
 from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select
@@ -60,32 +59,24 @@ def send_reset_code_email(
 ):
     current_settings = settings()
 
-    smtp_host = current_settings.smtp_host
-    smtp_port = current_settings.smtp_port
-    smtp_username = current_settings.smtp_username
-    smtp_password = current_settings.smtp_password
-    smtp_from_email = current_settings.smtp_from_email
+    resend_api_key = current_settings.resend_api_key
+    email_from = current_settings.email_from
 
     reset_code_ttl_minutes = (
         current_settings.password_reset_code_ttl_minutes
     )
 
-    smtp_password_value = (
-        smtp_password.get_secret_value()
-        if smtp_password is not None
+    resend_api_key_value = (
+        resend_api_key.get_secret_value()
+        if resend_api_key is not None
         else ""
     )
 
-    if (
-        not smtp_host
-        or not smtp_username
-        or not smtp_password_value
-        or not smtp_from_email
-    ):
+    if not resend_api_key_value or not email_from:
         logger.error(
             "Password reset email is not configured. "
-            "Check SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, "
-            "and SMTP_FROM_EMAIL environment variables."
+            "Check RESEND_API_KEY and EMAIL_FROM "
+            "environment variables."
         )
 
         raise HTTPException(
@@ -96,63 +87,36 @@ def send_reset_code_email(
             ),
         )
 
-    message = EmailMessage()
-
-    message["Subject"] = "SecureChat password reset code"
-    message["From"] = smtp_from_email
-    message["To"] = recipient_email
-
-    message.set_content(
-        f"""
-Hello,
-
-
-Your SecureChat password reset code is:
-
-
-{reset_code}
-
-
-This code expires in {reset_code_ttl_minutes} minutes.
-
-
-If you did not request a password reset, ignore this email.
-
-
-SecureChat
-"""
-    )
-
     try:
-        with smtplib.SMTP(
-            smtp_host,
-            smtp_port,
+        response = httpx.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": (
+                    f"Bearer {resend_api_key_value}"
+                ),
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": email_from,
+                "to": [recipient_email],
+                "subject": "SecureChat password reset code",
+                "text": (
+                    "Hello,\n\n"
+                    "Your SecureChat password reset code is:\n\n"
+                    f"{reset_code}\n\n"
+                    "This code expires in "
+                    f"{reset_code_ttl_minutes} minutes.\n\n"
+                    "If you did not request a password reset, "
+                    "ignore this email.\n\n"
+                    "SecureChat"
+                ),
+            },
             timeout=30,
-        ) as server:
-            server.starttls()
-            server.login(
-                smtp_username,
-                smtp_password_value,
-            )
-            server.send_message(message)
-
-    except smtplib.SMTPAuthenticationError as error:
-        logger.error(
-            "Gmail SMTP authentication failed: %s",
-            error,
         )
-
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Unable to send the password reset email. "
-                "Please contact an Administrator."
-            ),
-        ) from None
 
     except Exception as error:
         logger.error(
-            "Password reset email failed: %s",
+            "Password reset email request failed: %s",
             error,
         )
 
@@ -163,6 +127,21 @@ SecureChat
                 "Please try again later."
             ),
         ) from None
+
+    if response.status_code < 200 or response.status_code >= 300:
+        logger.error(
+            "Resend returned status %s: %s",
+            response.status_code,
+            response.text,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Unable to send the password reset email. "
+                "Please try again later."
+            ),
+        )
 
 
 class ForgotPasswordInput(BaseModel):

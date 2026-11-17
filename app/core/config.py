@@ -19,12 +19,9 @@ class Settings(BaseSettings):
 
     enable_docs: bool = False
 
-    # Gmail SMTP settings used to send password-reset codes.
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_username: str = ""
-    smtp_password: SecretStr | None = None
-    smtp_from_email: str = ""
+    # Resend email API settings.
+    resend_api_key: SecretStr | None = None
+    email_from: str = ""
 
     # Password-reset code lifetime in minutes.
     password_reset_code_ttl_minutes: int = 10
