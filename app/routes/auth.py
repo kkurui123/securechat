@@ -1,5 +1,5 @@
 import hashlib
-import hmac
+import logging
 import random
 import smtplib
 from datetime import datetime, timedelta, timezone
@@ -11,6 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.guards.auth import (
     current,
@@ -28,17 +29,7 @@ router = APIRouter(
 )
 
 
-import os
-
-
-SMTP_HOST = os.getenv("SMTP_HOST", "")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "")
-RESET_CODE_TTL_MINUTES = int(
-    os.getenv("PASSWORD_RESET_CODE_TTL_MINUTES", "10")
-)
+logger = logging.getLogger("uvicorn.error")
 
 
 def public_user(user):
@@ -54,7 +45,9 @@ def public_user(user):
 
 
 def hash_reset_code(code):
-    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        code.encode("utf-8")
+    ).hexdigest()
 
 
 def generate_reset_code():
@@ -65,12 +58,34 @@ def send_reset_code_email(
     recipient_email,
     reset_code,
 ):
+    smtp_host = settings.smtp_host
+    smtp_port = settings.smtp_port
+    smtp_username = settings.smtp_username
+    smtp_password = settings.smtp_password
+    smtp_from_email = settings.smtp_from_email
+
+    reset_code_ttl_minutes = (
+        settings.password_reset_code_ttl_minutes
+    )
+
+    smtp_password_value = (
+        smtp_password.get_secret_value()
+        if smtp_password is not None
+        else ""
+    )
+
     if (
-        not SMTP_HOST
-        or not SMTP_USERNAME
-        or not SMTP_PASSWORD
-        or not SMTP_FROM_EMAIL
+        not smtp_host
+        or not smtp_username
+        or not smtp_password_value
+        or not smtp_from_email
     ):
+        logger.error(
+            "Password reset email is not configured. "
+            "Check SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, "
+            "and SMTP_FROM_EMAIL environment variables."
+        )
+
         raise HTTPException(
             status_code=503,
             detail=(
@@ -79,14 +94,11 @@ def send_reset_code_email(
             ),
         )
 
-
     message = EmailMessage()
 
-
     message["Subject"] = "SecureChat password reset code"
-    message["From"] = SMTP_FROM_EMAIL
+    message["From"] = smtp_from_email
     message["To"] = recipient_email
-
 
     message.set_content(
         f"""
@@ -99,7 +111,7 @@ Your SecureChat password reset code is:
 {reset_code}
 
 
-This code expires in {RESET_CODE_TTL_MINUTES} minutes.
+This code expires in {reset_code_ttl_minutes} minutes.
 
 
 If you did not request a password reset, ignore this email.
@@ -109,19 +121,39 @@ SecureChat
 """
     )
 
-
     try:
         with smtplib.SMTP(
-            SMTP_HOST,
-            SMTP_PORT,
+            smtp_host,
+            smtp_port,
+            timeout=30,
         ) as server:
             server.starttls()
             server.login(
-                SMTP_USERNAME,
-                SMTP_PASSWORD,
+                smtp_username,
+                smtp_password_value,
             )
             server.send_message(message)
-    except Exception:
+
+    except smtplib.SMTPAuthenticationError as error:
+        logger.error(
+            "Gmail SMTP authentication failed: %s",
+            error,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Unable to send the password reset email. "
+                "Please contact an Administrator."
+            ),
+        ) from None
+
+    except Exception as error:
+        logger.error(
+            "Password reset email failed: %s",
+            error,
+        )
+
         raise HTTPException(
             status_code=502,
             detail=(
@@ -147,14 +179,17 @@ class ResetPasswordInput(BaseModel):
         min_length=5,
         max_length=254,
     )
+
     code: str = Field(
         min_length=6,
         max_length=6,
     )
+
     new_password: str = Field(
         min_length=8,
         max_length=128,
     )
+
     confirm_password: str = Field(
         min_length=8,
         max_length=128,
@@ -256,8 +291,9 @@ def forgot_password(
     reset_code = generate_reset_code()
 
     code_hash = hash_reset_code(reset_code)
+
     expires_at = datetime.now(timezone.utc) + timedelta(
-        minutes=RESET_CODE_TTL_MINUTES
+        minutes=settings.password_reset_code_ttl_minutes
     )
 
     db.query(PasswordResetCode).filter(
