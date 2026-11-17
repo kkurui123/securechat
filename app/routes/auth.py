@@ -58,14 +58,16 @@ def send_reset_code_email(
     recipient_email,
     reset_code,
 ):
-    smtp_host = settings.smtp_host
-    smtp_port = settings.smtp_port
-    smtp_username = settings.smtp_username
-    smtp_password = settings.smtp_password
-    smtp_from_email = settings.smtp_from_email
+    current_settings = settings()
+
+    smtp_host = current_settings.smtp_host
+    smtp_port = current_settings.smtp_port
+    smtp_username = current_settings.smtp_username
+    smtp_password = current_settings.smtp_password
+    smtp_from_email = current_settings.smtp_from_email
 
     reset_code_ttl_minutes = (
-        settings.password_reset_code_ttl_minutes
+        current_settings.password_reset_code_ttl_minutes
     )
 
     smtp_password_value = (
@@ -293,7 +295,7 @@ def forgot_password(
     code_hash = hash_reset_code(reset_code)
 
     expires_at = datetime.now(timezone.utc) + timedelta(
-        minutes=settings.password_reset_code_ttl_minutes
+        minutes=settings().password_reset_code_ttl_minutes
     )
 
     db.query(PasswordResetCode).filter(
