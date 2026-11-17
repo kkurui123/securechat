@@ -359,3 +359,54 @@ class RecoveryRequest(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+
+# =========================================================
+# PASSWORD RESET CODES
+# =========================================================
+
+
+class PasswordResetCode(Base):
+    __tablename__ = "password_reset_codes"
+
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=uid,
+    )
+
+
+    email: Mapped[str] = mapped_column(
+        String(320),
+        index=True,
+        nullable=False,
+    )
+
+
+    # Only the SHA-256 hash of the 6-digit code is stored.
+    # The actual code is sent only to the user's email address.
+    code_hash: Mapped[str] = mapped_column(
+        String(64),
+        index=True,
+        nullable=False,
+    )
+
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=now,
+        nullable=False,
+    )
+
+
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
