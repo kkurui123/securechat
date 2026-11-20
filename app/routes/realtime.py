@@ -2,6 +2,9 @@ import asyncio
 import time
 
 
+from datetime import datetime, timezone
+
+
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,7 +15,7 @@ from app.core.database import SessionLocal, get_db
 from app.guards.auth import guard, resolve, token
 from app.models.entities import Conversation, Message
 from app.schemas.auth import MessageInput
-from app.services.chat import member, save_message
+from app.services.chat import member, message_dict, save_message
 
 
 
@@ -28,15 +31,22 @@ connections: dict[str, set[asyncio.Queue]] = {}
 async def publish(
     users: list[str],
     event: dict,
-) -> None:
+) -> list[str]:
+    delivered_to = []
+
+
     for user_id in users:
         for queue in list(
             connections.get(user_id, set())
         ):
             try:
                 queue.put_nowait(event)
+                delivered_to.append(user_id)
             except asyncio.QueueFull:
                 pass
+
+
+    return list(set(delivered_to))
 
 
 
@@ -108,10 +118,52 @@ def process(
 
 
 
+def mark_messages_delivered(
+    conversation_id: str,
+    recipient_id: str,
+) -> list[dict]:
+    with SessionLocal() as db:
+        messages = db.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.sender_id != recipient_id,
+                Message.delivered_at.is_(None),
+            )
+            .with_for_update()
+        ).all()
+
+
+        if not messages:
+            return []
+
+
+        delivered_at = datetime.now(timezone.utc)
+
+
+        for message in messages:
+            message.delivered_at = delivered_at
+
+
+        db.commit()
+
+
+        return [
+            {
+                "id": message.id,
+                "conversation_id": message.conversation_id,
+                "sender_id": message.sender_id,
+                "delivered_at": delivered_at.isoformat(),
+            }
+            for message in messages
+        ]
+
+
+
 def mark_conversation_read(
     encoded: str,
     conversation_id: str,
-) -> tuple[list[str], int]:
+) -> tuple[list[str], list[dict]]:
     with SessionLocal() as db:
         user, _ = resolve(
             encoded,
@@ -135,24 +187,32 @@ def mark_conversation_read(
                 Message.read_at.is_(None),
             )
             .with_for_update()
-        )
+        ).all()
 
 
         messages = list(unread_messages)
 
 
         read_at = None
+        read_messages = []
 
 
         if messages:
-            from datetime import datetime, timezone
-
-
             read_at = datetime.now(timezone.utc)
 
 
             for message in messages:
                 message.read_at = read_at
+
+
+                read_messages.append(
+                    {
+                        "id": message.id,
+                        "conversation_id": message.conversation_id,
+                        "sender_id": message.sender_id,
+                        "read_at": read_at.isoformat(),
+                    }
+                )
 
 
             db.commit()
@@ -164,7 +224,7 @@ def mark_conversation_read(
         ]
 
 
-        return recipients, len(messages)
+        return recipients, read_messages
 
 
 
@@ -271,22 +331,21 @@ async def socket(
 
 
                 try:
-                    recipients, marked_count = await run_in_threadpool(
+                    recipients, read_messages = await run_in_threadpool(
                         mark_conversation_read,
                         encoded,
                         conversation_id,
                     )
 
 
-                    if marked_count > 0:
+                    if read_messages:
                         await publish(
                             recipients,
                             {
                                 "type": "messages-read",
                                 "conversation_id": conversation_id,
                                 "reader_id": user_id,
-                                "read_at": None,
-                                "count": marked_count,
+                                "messages": read_messages,
                             },
                         )
                 except HTTPException as error:
@@ -309,13 +368,41 @@ async def socket(
                 )
 
 
-                await publish(
+                delivered_to = await publish(
                     recipients,
                     {
                         "type": "message",
                         "message": message,
                     },
                 )
+
+
+                delivered_recipients = [
+                    recipient_id
+                    for recipient_id in delivered_to
+                    if recipient_id != message["sender_id"]
+                ]
+
+
+                if delivered_recipients:
+                    delivered_messages = await run_in_threadpool(
+                        mark_messages_delivered,
+                        message["conversation_id"],
+                        delivered_recipients[0],
+                    )
+
+
+                    if delivered_messages:
+                        await publish(
+                            [message["sender_id"]],
+                            {
+                                "type": "messages-delivered",
+                                "conversation_id": message["conversation_id"],
+                                "recipient_id": delivered_recipients[0],
+                                "messages": delivered_messages,
+                            },
+                        )
+
             except (ValueError, KeyError):
                 queue.put_nowait(
                     {

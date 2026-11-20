@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.database import SessionLocal, get_db
 from app.guards.auth import current, guard
 from app.models.entities import Conversation, Message, User
-from app.routes.realtime import publish
+from app.routes.realtime import mark_messages_delivered, publish
 from app.schemas.auth import ConversationInput, MessageInput
 from app.services.chat import member, message_dict, save_message
 
@@ -443,6 +443,7 @@ def mark_read(
 
 
     read_at = None
+    read_messages = []
 
 
     if messages:
@@ -451,6 +452,16 @@ def mark_read(
 
         for message in messages:
             message.read_at = read_at
+
+
+            read_messages.append(
+                {
+                    "id": message.id,
+                    "conversation_id": message.conversation_id,
+                    "sender_id": message.sender_id,
+                    "read_at": read_at.isoformat(),
+                }
+            )
 
 
         db.commit()
@@ -462,6 +473,18 @@ def mark_read(
     ]
 
 
+    if read_messages:
+        run_in_threadpool_sync_publish(
+            recipients,
+            {
+                "type": "messages-read",
+                "conversation_id": conversation_id,
+                "reader_id": user.id,
+                "messages": read_messages,
+            },
+        )
+
+
     return {
         "conversation_id": conversation_id,
         "marked_count": len(messages),
@@ -471,6 +494,27 @@ def mark_read(
             else None
         ),
     }
+
+
+
+def run_in_threadpool_sync_publish(
+    recipients: list[str],
+    event: dict,
+) -> None:
+    import asyncio
+
+
+    try:
+        asyncio.get_running_loop().create_task(
+            publish(
+                recipients,
+                event,
+            )
+        )
+    except RuntimeError:
+        # This HTTP route is synchronous, so there is no running
+        # event loop. The WebSocket read path handles live updates.
+        pass
 
 
 
@@ -579,13 +623,40 @@ async def send_message(
     )
 
 
-    await publish(
+    delivered_to = await publish(
         recipients,
         {
             "type": "message",
             "message": message,
         },
     )
+
+
+    delivered_recipients = [
+        recipient_id
+        for recipient_id in delivered_to
+        if recipient_id != message["sender_id"]
+    ]
+
+
+    if delivered_recipients:
+        delivered_messages = await run_in_threadpool(
+            mark_messages_delivered,
+            message["conversation_id"],
+            delivered_recipients[0],
+        )
+
+
+        if delivered_messages:
+            await publish(
+                [message["sender_id"]],
+                {
+                    "type": "messages-delivered",
+                    "conversation_id": message["conversation_id"],
+                    "recipient_id": delivered_recipients[0],
+                    "messages": delivered_messages,
+                },
+            )
 
 
     return message

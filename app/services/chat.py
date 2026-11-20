@@ -76,6 +76,11 @@ def message_dict(
         "kind": message.kind,
         "ciphertext": message.ciphertext,
         "created_at": message.created_at.isoformat(),
+        "delivered_at": (
+            message.delivered_at.isoformat()
+            if message.delivered_at is not None
+            else None
+        ),
         "read_at": (
             message.read_at.isoformat()
             if message.read_at is not None
