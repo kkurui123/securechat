@@ -219,6 +219,13 @@ class Message(Base):
     )
 
 
+    # NULL means the recipient has not received the message yet.
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
     # NULL means the recipient has not read the message yet.
     read_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
